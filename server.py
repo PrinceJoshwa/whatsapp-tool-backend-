@@ -786,8 +786,11 @@ app.mount("/api/files", StaticFiles(directory=str(UPLOAD_DIR)), name="files")
 
 app.add_middleware(
     CORSMiddleware,
+    allow_origins=[
+        "https://whatsapp-tool-frontend-seven.vercel.app",
+        "http://localhost:3000",
+    ],
     allow_credentials=True,
-    allow_origins=os.environ.get("CORS_ORIGINS", "*").split(","),
     allow_methods=["*"],
     allow_headers=["*"],
 )
