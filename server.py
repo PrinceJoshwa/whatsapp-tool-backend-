@@ -799,7 +799,7 @@ allowed_origins = list(dict.fromkeys([
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
-    # allow_origin_regex=r"^https://whatsapp-tool-frontend(?:-[a-z0-9-]+)?\.vercel\.app$",
+    allow_origin_regex=r"^https://whatsapp-tool-frontend(?:-[a-z0-9-]+)?\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
