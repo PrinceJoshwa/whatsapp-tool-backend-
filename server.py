@@ -784,12 +784,22 @@ async def root():
 app.include_router(api_router)
 app.mount("/api/files", StaticFiles(directory=str(UPLOAD_DIR)), name="files")
 
+configured_origins = [
+    origin.strip().rstrip("/")
+    for origin in os.environ.get("CORS_ORIGINS", "").split(",")
+    if origin.strip()
+]
+allowed_origins = list(dict.fromkeys([
+    "https://whatsapp-tool-frontend-seven.vercel.app",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    *configured_origins,
+]))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://whatsapp-tool-frontend-seven.vercel.app",
-        "http://localhost:3000",
-    ],
+    allow_origins=allowed_origins,
+    allow_origin_regex=r"^https://whatsapp-tool-frontend(?:-[a-z0-9-]+)?\.vercel\.app$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
