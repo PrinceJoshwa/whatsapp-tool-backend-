@@ -245,6 +245,24 @@ async def evolution_request(method: str, path: str, payload: dict = None, timeou
         return {"raw": resp.text}
 
 
+async def ensure_evolution_instance(instance: str):
+    """Create the named Evolution instance when a tenant has not created it yet."""
+    if not instance:
+        raise HTTPException(400, "Set the Evolution instance name first")
+    try:
+        await evolution_request("GET", f"/instance/connectionState/{instance}", timeout=30.0)
+        return
+    except HTTPException as exc:
+        if "(404)" not in str(exc.detail):
+            raise
+
+    await evolution_request("POST", "/instance/create", {
+        "instanceName": instance,
+        "integration": "WHATSAPP-BAILEYS",
+        "qrcode": True,
+    })
+
+
 # ---------- Webhook ingestion ----------
 
 def _first(d: dict, *keys):
@@ -721,12 +739,9 @@ async def update_tenant(data: TenantPatch, admin=Depends(require_admin)):
         await db.tenants.update_one({"id": admin["tenant_id"]}, {"$set": updates})
     if updates.get("evolution_instance_name"):
         try:
-            await evolution_request("POST", "/instance/create", {
-                "instanceName": updates["evolution_instance_name"],
-                "integration": "WHATSAPP-BAILEYS", "qrcode": False,
-            })
+            await ensure_evolution_instance(updates["evolution_instance_name"])
         except HTTPException:
-            pass  # instance may already exist; connect via QR from Settings
+            pass  # Keep saving tenant settings if Evolution is temporarily unavailable.
     return await db.tenants.find_one({"id": admin["tenant_id"]}, {"_id": 0})
 
 
@@ -736,6 +751,7 @@ async def evolution_qrcode(user=Depends(get_current_user)):
     instance = (tenant or {}).get("evolution_instance_name")
     if not instance:
         raise HTTPException(400, "Set the Evolution instance name first")
+    await ensure_evolution_instance(instance)
     state_resp = await evolution_request("GET", f"/instance/connectionState/{instance}")
     state = (state_resp.get("instance") or {}).get("state") or state_resp.get("state")
     if state == "open":
@@ -753,6 +769,7 @@ async def configure_webhook(request: Request, admin=Depends(require_admin)):
     instance = (tenant or {}).get("evolution_instance_name")
     if not instance:
         raise HTTPException(400, "Set the Evolution instance name first")
+    await ensure_evolution_instance(instance)
     proto = request.headers.get("x-forwarded-proto", "https")
     host = request.headers.get("x-forwarded-host") or request.headers.get("host")
     url = f"{proto}://{host}/api/webhook/inbound/{tenant['id']}"
