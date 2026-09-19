@@ -665,6 +665,30 @@ async def update_contact(contact_id: str, data: ContactPatch, user=Depends(get_c
     return await db.contacts.find_one({"id": contact_id}, {"_id": 0})
 
 
+@api_router.delete("/contacts/{contact_id}")
+async def delete_contact(contact_id: str, user=Depends(get_current_user)):
+    contact = await db.contacts.find_one({"id": contact_id, "tenant_id": user["tenant_id"]}, {"_id": 0})
+    if not contact:
+        raise HTTPException(404, "Contact not found")
+
+    conversations = await db.conversations.find(
+        {"contact_id": contact_id, "tenant_id": user["tenant_id"]},
+        {"id": 1, "_id": 0},
+    ).to_list(5000)
+    conversation_ids = [conversation["id"] for conversation in conversations]
+    if conversation_ids:
+        await db.messages.delete_many({
+            "tenant_id": user["tenant_id"],
+            "conversation_id": {"$in": conversation_ids},
+        })
+        await db.conversations.delete_many({
+            "tenant_id": user["tenant_id"],
+            "contact_id": contact_id,
+        })
+    await db.contacts.delete_one({"id": contact_id, "tenant_id": user["tenant_id"]})
+    return {"status": "deleted", "contact_id": contact_id}
+
+
 # ---------- Team ----------
 
 @api_router.get("/team")
