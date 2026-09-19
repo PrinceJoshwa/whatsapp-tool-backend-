@@ -745,13 +745,28 @@ async def update_tenant(data: TenantPatch, admin=Depends(require_admin)):
     return await db.tenants.find_one({"id": admin["tenant_id"]}, {"_id": 0})
 
 
+async def configure_evolution_webhook(instance: str, tenant_id: str, request: Request):
+    proto = request.headers.get("x-forwarded-proto", "https")
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+    url = f"{proto}://{host}/api/webhook/inbound/{tenant_id}"
+    resp = await evolution_request("POST", f"/webhook/set/{instance}", {"webhook": {
+        "enabled": True, "url": url, "webhookByEvents": False,
+        "webhookBase64": True, "events": ["MESSAGES_UPSERT"],
+    }})
+    return {"webhook_url": url, "evolution": resp}
+
+
 @api_router.get("/tenant/evolution/qrcode")
-async def evolution_qrcode(user=Depends(get_current_user)):
+async def evolution_qrcode(request: Request, user=Depends(get_current_user)):
     tenant = await db.tenants.find_one({"id": user["tenant_id"]})
     instance = (tenant or {}).get("evolution_instance_name")
     if not instance:
         raise HTTPException(400, "Set the Evolution instance name first")
     await ensure_evolution_instance(instance)
+    try:
+        await configure_evolution_webhook(instance, tenant["id"], request)
+    except HTTPException as exc:
+        logger.warning("Could not configure Evolution webhook before QR connection: %s", exc.detail)
     state_resp = await evolution_request("GET", f"/instance/connectionState/{instance}")
     state = (state_resp.get("instance") or {}).get("state") or state_resp.get("state")
     if state == "open":
@@ -770,14 +785,8 @@ async def configure_webhook(request: Request, admin=Depends(require_admin)):
     if not instance:
         raise HTTPException(400, "Set the Evolution instance name first")
     await ensure_evolution_instance(instance)
-    proto = request.headers.get("x-forwarded-proto", "https")
-    host = request.headers.get("x-forwarded-host") or request.headers.get("host")
-    url = f"{proto}://{host}/api/webhook/inbound/{tenant['id']}"
-    resp = await evolution_request("POST", f"/webhook/set/{instance}", {"webhook": {
-        "enabled": True, "url": url, "webhookByEvents": False,
-        "webhookBase64": True, "events": ["MESSAGES_UPSERT"],
-    }})
-    return {"status": "configured", "webhook_url": url, "evolution": resp}
+    configured = await configure_evolution_webhook(instance, tenant["id"], request)
+    return {"status": "configured", **configured}
 
 
 @api_router.get("/tenant/evolution/status")
