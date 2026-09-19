@@ -304,8 +304,9 @@ def normalize_events(payload) -> list:
                     "external_id": msg.get("id"),
                     "timestamp": msg.get("timestamp"),
                 })
-    # Evolution API messages.upsert format
-    evo = payload.get("data")
+    # Evolution API messages.upsert format. Depending on the Evolution version,
+    # the event data is either the payload itself or nested under `data`.
+    evo = payload.get("data") if isinstance(payload.get("data"), dict) else payload
     if isinstance(evo, dict) and isinstance(evo.get("key"), dict):
         key = evo["key"]
         msg = evo.get("message") or {}
@@ -758,8 +759,8 @@ async def configure_evolution_webhook(instance: str, tenant_id: str, request: Re
         host = request.headers.get("x-forwarded-host") or request.headers.get("host")
         url = f"{proto}://{host}/api/webhook/inbound/{tenant_id}"
     resp = await evolution_request("POST", f"/webhook/set/{instance}", {"webhook": {
-        "enabled": True, "url": url, "webhookByEvents": False,
-        "webhookBase64": True, "events": ["MESSAGES_UPSERT"],
+        "enabled": True, "url": url, "webhook_by_events": False,
+        "webhook_base64": True, "events": ["MESSAGES_UPSERT"],
     }})
     return {"webhook_url": url, "evolution": resp}
 
