@@ -32,6 +32,7 @@ MEDIA_TYPES = {"text", "image", "document", "audio", "video"}
 STATUSES = {"open", "pending", "resolved"}
 EVO_URL = os.environ.get("EVOLUTION_API_URL", "").rstrip("/")
 EVO_KEY = os.environ.get("EVOLUTION_API_KEY", "")
+PUBLIC_BACKEND_URL = os.environ.get("PUBLIC_BACKEND_URL", "").rstrip("/")
 UPLOAD_DIR = Path(__file__).parent / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
@@ -746,9 +747,12 @@ async def update_tenant(data: TenantPatch, admin=Depends(require_admin)):
 
 
 async def configure_evolution_webhook(instance: str, tenant_id: str, request: Request):
-    proto = request.headers.get("x-forwarded-proto", "https")
-    host = request.headers.get("x-forwarded-host") or request.headers.get("host")
-    url = f"{proto}://{host}/api/webhook/inbound/{tenant_id}"
+    if PUBLIC_BACKEND_URL:
+        url = f"{PUBLIC_BACKEND_URL}/api/webhook/inbound/{tenant_id}"
+    else:
+        proto = request.headers.get("x-forwarded-proto", "https")
+        host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+        url = f"{proto}://{host}/api/webhook/inbound/{tenant_id}"
     resp = await evolution_request("POST", f"/webhook/set/{instance}", {"webhook": {
         "enabled": True, "url": url, "webhookByEvents": False,
         "webhookBase64": True, "events": ["MESSAGES_UPSERT"],
