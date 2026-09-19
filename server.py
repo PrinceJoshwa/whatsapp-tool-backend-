@@ -233,7 +233,11 @@ async def evolution_request(method: str, path: str, payload: dict = None, timeou
             resp = await client.request(
                 method,
                 f"{EVO_URL}{path}",
-                headers={"apikey": EVO_KEY, "Content-Type": "application/json"},
+                headers={
+                    "apikey": EVO_KEY,
+                    "Content-Type": "application/json",
+                    "Bypass-Tunnel-Reminder": "true",
+                },
                 json=payload,
             )
     except httpx.RequestError as e:
