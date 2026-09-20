@@ -323,7 +323,9 @@ def normalize_events(payload) -> list:
         text = msg.get("conversation") or (msg.get("extendedTextMessage") or {}).get("text")
         events.append({
             "phone": remote.split("@")[0],
-            "name": evo.get("pushName"),
+            # Evolution's pushName is the connected account's name for fromMe events,
+            # not the recipient's name. Only use it for inbound customer messages.
+            "name": None if key.get("fromMe") else evo.get("pushName"),
             "type": media_map.get(mk, "text"),
             "text": text,
             "media_url": _first(media_obj, "url", "mediaUrl"),
