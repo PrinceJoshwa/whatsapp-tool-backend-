@@ -851,6 +851,16 @@ async def evolution_status(user=Depends(get_current_user)):
         return {"configured": True, "state": None, "error": e.detail}
 
 
+@api_router.delete("/tenant/evolution/logout")
+async def evolution_logout(admin=Depends(require_admin)):
+    tenant = await db.tenants.find_one({"id": admin["tenant_id"]})
+    instance = (tenant or {}).get("evolution_instance_name")
+    if not instance:
+        raise HTTPException(400, "Set the Evolution instance name first")
+    result = await evolution_request("DELETE", f"/instance/logout/{instance}")
+    return {"status": "logged_out", "instance": instance, "evolution": result}
+
+
 @api_router.get("/")
 async def root():
     return {"message": "Slash API"}
