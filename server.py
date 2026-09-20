@@ -334,6 +334,7 @@ def normalize_events(payload) -> list:
             "external_id": key.get("id"),
             "timestamp": evo.get("messageTimestamp"),
             "from_me": bool(key.get("fromMe")),
+            "evolution_message": evo,
         })
         return events
 
@@ -373,8 +374,23 @@ async def store_inbound(tenant_id: str, ev: dict):
     phone = re.sub(r"\D", "", str(ev["phone"])) or str(ev["phone"])
     from_me = bool(ev.get("from_me"))
     media_url = ev.get("media_url")
-    if ev.get("media_base64"):
-        media_url = save_base64_media(ev["media_base64"], ev.get("filename") or ev["type"], ev.get("mimetype")) or media_url
+    media_base64 = ev.get("media_base64")
+    if ev.get("type") in {"image", "video", "audio", "document"} and not media_base64 and ev.get("evolution_message"):
+        tenant = await db.tenants.find_one({"id": tenant_id}, {"evolution_instance_name": 1, "_id": 0})
+        instance = (tenant or {}).get("evolution_instance_name")
+        if instance:
+            try:
+                media_resp = await evolution_request(
+                    "POST",
+                    f"/chat/getBase64FromMediaMessage/{instance}",
+                    {"message": ev["evolution_message"], "convertToMp4": False},
+                    timeout=45.0,
+                )
+                media_base64 = media_resp.get("base64") or (media_resp.get("data") or {}).get("base64")
+            except HTTPException as exc:
+                logger.warning("Could not download inbound media from Evolution: %s", exc.detail)
+    if media_base64:
+        media_url = save_base64_media(media_base64, ev.get("filename") or ev["type"], ev.get("mimetype")) or media_url
     contact = await db.contacts.find_one({"tenant_id": tenant_id, "phone": phone})
     if not contact:
         contact = {
@@ -592,7 +608,7 @@ async def send_file_message(cid: str, file: UploadFile = File(...), caption: str
         mediatype = "image" if mime.startswith("image/") else "video" if mime.startswith("video/") else "document"
         resp = await evolution_request("POST", f"/message/sendMedia/{instance}", {
             "number": number, "mediatype": mediatype, "mimetype": mime,
-            "media": b64, "fileName": fname, "caption": caption or "",
+            "media": b64, "fileName": fname, "filename": fname, "caption": caption or "",
         }, timeout=30.0)
         mtype = mediatype
     return await record_outbound(user, conv, contact, mtype, media_url=saved_url, caption=caption or None, filename=fname, mimetype=mime, external_id=(resp.get("key") or {}).get("id"))
@@ -619,7 +635,7 @@ async def send_link_message(cid: str, data: SendLinkInput, user=Depends(get_curr
             mime = f"{mediatype}/{ext.lstrip('.').replace('jpg', 'jpeg')}"
         resp = await evolution_request("POST", f"/message/sendMedia/{instance}", {
             "number": number, "mediatype": mediatype, "mimetype": mime,
-            "media": data.url, "fileName": fname, "caption": data.caption or "",
+            "media": data.url, "fileName": fname, "filename": fname, "caption": data.caption or "",
         }, timeout=30.0)
         mtype = mediatype
     return await record_outbound(user, conv, contact, mtype, media_url=data.url, caption=data.caption or None, filename=fname, mimetype=mime, external_id=(resp.get("key") or {}).get("id"))
