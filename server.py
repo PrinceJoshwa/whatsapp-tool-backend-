@@ -46,6 +46,13 @@ def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def mask_phone(phone: str) -> str:
+    digits = re.sub(r"\D", "", str(phone or ""))
+    if len(digits) <= 4:
+        return "••••"
+    return f"{digits[:2]}{'•' * max(4, len(digits) - 4)}{digits[-2:]}"
+
+
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
@@ -321,8 +328,10 @@ def normalize_events(payload) -> list:
         if mk == "documentWithCaptionMessage":
             media_obj = media_obj.get("documentMessage") or media_obj
         text = msg.get("conversation") or (msg.get("extendedTextMessage") or {}).get("text")
+        remote_alt = key.get("remoteJidAlt") or ""
+        phone_jid = remote_alt if "@s.whatsapp.net" in remote_alt else remote
         events.append({
-            "phone": remote.split("@")[0],
+            "phone": phone_jid.split("@")[0],
             # Evolution's pushName is the connected account's name for fromMe events,
             # not the recipient's name. Only use it for inbound customer messages.
             "name": None if key.get("fromMe") else evo.get("pushName"),
@@ -357,6 +366,25 @@ def normalize_events(payload) -> list:
             "timestamp": _first(flat, "timestamp", "created_at", "time"),
         })
     return events
+
+
+def history_items(response) -> list:
+    if isinstance(response, list):
+        return response
+    if not isinstance(response, dict):
+        return []
+    messages = response.get("messages")
+    if isinstance(messages, dict) and isinstance(messages.get("records"), list):
+        return messages["records"]
+    for key in ("messages", "data", "items"):
+        value = response.get(key)
+        if isinstance(value, list):
+            return value
+        if isinstance(value, dict):
+            nested = history_items(value)
+            if nested:
+                return nested
+    return []
 
 
 async def store_inbound(tenant_id: str, ev: dict):
@@ -457,6 +485,27 @@ async def inbound_webhook(tenant_id: str, request: Request):
     return {"status": "ok", "received": len(stored)}
 
 
+@api_router.post("/tenant/evolution/sync-history")
+async def sync_evolution_history(admin=Depends(require_admin)):
+    tenant = await db.tenants.find_one({"id": admin["tenant_id"]})
+    instance = (tenant or {}).get("evolution_instance_name")
+    if not instance:
+        raise HTTPException(400, "Set the Evolution instance name first")
+    response = await evolution_request(
+        "POST",
+        f"/chat/findMessages/{instance}",
+        {"where": {}, "page": 1, "limit": 100},
+        timeout=90.0,
+    )
+    items = history_items(response)
+    received = 0
+    for item in items:
+        for event in normalize_events(item):
+            if await store_inbound(admin["tenant_id"], event):
+                received += 1
+    return {"status": "synced", "available": len(items), "imported": received}
+
+
 # ---------- Conversations ----------
 
 async def tenant_users_map(tenant_id: str):
@@ -477,7 +526,7 @@ async def list_conversations(status: Optional[str] = None, search: Optional[str]
         contact = contacts.get(c["contact_id"], {})
         item = dict(c)
         item["contact_name"] = contact.get("name")
-        item["contact_phone"] = contact.get("phone")
+        item["contact_phone"] = contact.get("phone") if user["role"] == "admin" else mask_phone(contact.get("phone"))
         item["contact_labels"] = contact.get("labels", [])
         item["assignee_name"] = (users.get(c.get("assigned_to")) or {}).get("name")
         if search:
@@ -499,6 +548,8 @@ async def get_conversation(cid: str, user=Depends(get_current_user)):
         raise HTTPException(404, "Conversation not found")
     contact = await db.contacts.find_one({"id": conv["contact_id"]}, {"_id": 0})
     users = await tenant_users_map(user["tenant_id"])
+    if contact and user["role"] != "admin":
+        contact = {**contact, "phone": mask_phone(contact.get("phone"))}
     conv["contact"] = contact
     conv["assignee_name"] = (users.get(conv.get("assigned_to")) or {}).get("name")
     return conv
@@ -657,6 +708,8 @@ async def list_contacts(search: Optional[str] = None, user=Depends(get_current_u
     for c in contacts:
         item = dict(c)
         item["conversation_count"] = counts.get(c["id"], 0)
+        if user["role"] != "admin":
+            item["phone"] = mask_phone(item.get("phone"))
         if search:
             s = search.lower()
             hay = " ".join([c.get("name") or "", c.get("phone") or "", " ".join(c.get("labels") or [])]).lower()
