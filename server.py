@@ -16,6 +16,7 @@ import bcrypt
 import httpx
 import jwt
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Depends, UploadFile, File, Form
+from fastapi.responses import Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.cors import CORSMiddleware
@@ -452,8 +453,9 @@ async def store_inbound(tenant_id: str, ev: dict):
         "id": str(uuid.uuid4()), "tenant_id": tenant_id, "conversation_id": conv["id"],
         "contact_id": contact["id"], "direction": "outbound" if from_me else "inbound",
         "is_note": False, "type": ev["type"], "text": ev.get("text"),
-        "media_url": media_url, "caption": ev.get("caption"), "filename": ev.get("filename"),
-        "mimetype": ev.get("mimetype"), "external_id": ev.get("external_id"),
+        "media_url": media_url, "media_base64": media_base64, "caption": ev.get("caption"),
+        "filename": ev.get("filename"), "mimetype": ev.get("mimetype"),
+        "external_id": ev.get("external_id"),
         "author_name": ev.get("name") if from_me else None, "created_at": created,
     }
     await db.messages.insert_one(msg)
@@ -572,8 +574,31 @@ async def get_messages(cid: str, user=Depends(get_current_user)):
         raise HTTPException(404, "Conversation not found")
     await db.conversations.update_one({"id": cid}, {"$set": {"unread_count": 0}})
     return await db.messages.find(
-        {"conversation_id": cid, "tenant_id": user["tenant_id"]}, {"_id": 0}
+        {"conversation_id": cid, "tenant_id": user["tenant_id"]}, {"_id": 0, "media_base64": 0}
     ).sort("created_at", 1).to_list(2000)
+
+
+@api_router.get("/messages/{message_id}/media")
+async def download_message_media(message_id: str, user=Depends(get_current_user)):
+    message = await db.messages.find_one(
+        {"id": message_id, "tenant_id": user["tenant_id"]},
+        {"_id": 0, "media_base64": 1, "mimetype": 1, "filename": 1},
+    )
+    if not message or not message.get("media_base64"):
+        raise HTTPException(404, "Attachment is no longer available")
+    encoded = message["media_base64"]
+    if encoded.startswith("data:") and "," in encoded:
+        encoded = encoded.split(",", 1)[1]
+    try:
+        content = base64.b64decode(encoded)
+    except (ValueError, TypeError):
+        raise HTTPException(404, "Attachment is no longer available")
+    filename = (message.get("filename") or "attachment").replace("\"", "")
+    return Response(
+        content=content,
+        media_type=message.get("mimetype") or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @api_router.patch("/conversations/{cid}")
@@ -626,11 +651,11 @@ async def resolve_conversation_context(cid: str, user: dict):
     return conv, contact, instance
 
 
-async def record_outbound(user, conv, contact, mtype, text=None, media_url=None, caption=None, filename=None, mimetype=None, external_id=None):
+async def record_outbound(user, conv, contact, mtype, text=None, media_url=None, media_base64=None, caption=None, filename=None, mimetype=None, external_id=None):
     msg = {
         "id": str(uuid.uuid4()), "tenant_id": user["tenant_id"], "conversation_id": conv["id"],
         "contact_id": contact["id"], "direction": "outbound", "is_note": False,
-        "type": mtype, "text": text, "media_url": media_url, "caption": caption,
+        "type": mtype, "text": text, "media_url": media_url, "media_base64": media_base64, "caption": caption,
         "filename": filename, "mimetype": mimetype, "external_id": external_id,
         "author_id": user["id"], "author_name": user["name"], "created_at": utcnow(),
     }
@@ -674,7 +699,7 @@ async def send_file_message(cid: str, file: UploadFile = File(...), caption: str
             "media": b64, "fileName": fname, "filename": fname, "caption": caption or "",
         }, timeout=30.0)
         mtype = mediatype
-    return await record_outbound(user, conv, contact, mtype, media_url=saved_url, caption=caption or None, filename=fname, mimetype=mime, external_id=(resp.get("key") or {}).get("id"))
+    return await record_outbound(user, conv, contact, mtype, media_url=saved_url, media_base64=b64, caption=caption or None, filename=fname, mimetype=mime, external_id=(resp.get("key") or {}).get("id"))
 
 
 @api_router.post("/conversations/{cid}/send-link")
