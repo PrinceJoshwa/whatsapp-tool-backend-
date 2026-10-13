@@ -33,7 +33,11 @@ STATUSES = {"open", "pending", "resolved"}
 EVO_URL = os.environ.get("EVOLUTION_API_URL", "").rstrip("/")
 EVO_KEY = os.environ.get("EVOLUTION_API_KEY", "")
 PUBLIC_BACKEND_URL = os.environ.get("PUBLIC_BACKEND_URL", "").rstrip("/")
-UPLOAD_DIR = Path(__file__).parent / "uploads"
+# Vercel's deployed bundle is read-only; /tmp is the writable serverless area.
+UPLOAD_DIR = Path(os.environ.get(
+    "UPLOAD_DIR",
+    "/tmp/slash-uploads" if os.environ.get("VERCEL") else str(Path(__file__).parent / "uploads"),
+))
 UPLOAD_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Slash API")
@@ -213,10 +217,16 @@ MIME_EXT = {
 }
 
 
-def save_upload_bytes(content: bytes, filename: str, mimetype: str = "") -> str:
+def save_upload_bytes(content: bytes, filename: str, mimetype: str = "") -> Optional[str]:
     ext = Path(filename or "").suffix or MIME_EXT.get((mimetype or "").split(";")[0].strip(), ".bin")
     fname = f"{uuid.uuid4().hex}{ext}"
-    (UPLOAD_DIR / fname).write_bytes(content)
+    try:
+        (UPLOAD_DIR / fname).write_bytes(content)
+    except OSError:
+        # Sending to Evolution uses the in-memory base64 payload, so a temporary
+        # file failure must not prevent the WhatsApp message from being sent.
+        logger.warning("Unable to persist uploaded media to %s", UPLOAD_DIR, exc_info=True)
+        return None
     return f"/api/files/{fname}"
 
 
