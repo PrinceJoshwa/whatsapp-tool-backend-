@@ -217,6 +217,15 @@ MIME_EXT = {
     "application/pdf": ".pdf",
 }
 
+MIME_BY_EXT = {
+    ".ppt": "application/vnd.ms-powerpoint",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+
 
 def save_upload_bytes(content: bytes, filename: str, mimetype: str = "") -> Optional[str]:
     ext = Path(filename or "").suffix or MIME_EXT.get((mimetype or "").split(";")[0].strip(), ".bin")
@@ -684,8 +693,10 @@ async def send_file_message(cid: str, file: UploadFile = File(...), caption: str
     content = await file.read()
     if len(content) > 16 * 1024 * 1024:
         raise HTTPException(413, "File too large (max 16 MB)")
-    mime = (file.content_type or "application/octet-stream").split(";")[0]
     fname = file.filename or "file"
+    ext = Path(fname).suffix.lower()
+    browser_mime = (file.content_type or "application/octet-stream").split(";")[0].lower()
+    mime = MIME_BY_EXT.get(ext, browser_mime)
     saved_url = save_upload_bytes(content, fname, mime)
     b64 = base64.b64encode(content).decode()
     number = re.sub(r"\D", "", contact["phone"])
